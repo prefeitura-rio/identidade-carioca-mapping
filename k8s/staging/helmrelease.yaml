@@ -57,6 +57,8 @@ spec:
         credentialsRef:
           secretName: universal-auth-credentials
           secretNamespace: infisical-operator-system
+    istio:
+      enabled: false
     autoscaling:
       enabled: true
       minReplicas: 2
