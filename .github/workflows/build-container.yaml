@@ -84,7 +84,7 @@ jobs:
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
         id: meta
         run: |
-           IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/identidade-carioca-mapping"
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/identidade-carioca-mapping"
           if [ "${GITHUB_REF##*/}" == "main" ]; then
             COMMIT_HASH=${{ github.sha }}
             TAG1="stable"
