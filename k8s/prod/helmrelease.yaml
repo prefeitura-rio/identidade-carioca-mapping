@@ -30,8 +30,6 @@ spec:
       repository: ghcr.io/prefeitura-rio/identidade-carioca-mapping
       tag: sha-4f633caffbe2ac79e1a59cb0e5419b4784fd8ab1@sha256:a0b5dd5b5e331bd67b92d0dfd5020e5683ea245c55af43ba0a7bef8a5c205a83
       pullPolicy: IfNotPresent
-    imagePullSecrets:
-      - name: ghcr-credentials
     service:
       type: ClusterIP
       port: 8000

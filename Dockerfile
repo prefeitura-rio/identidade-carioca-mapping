@@ -8,7 +8,8 @@ FROM python:3.11-slim AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_CACHE_DIR=/tmp/uv-cache
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -39,6 +40,7 @@ COPY alembic.ini ./
 
 # Change ownership to app user
 RUN chown -R appuser:appuser /app
+RUN mkdir -p /tmp/uv-cache && chown -R appuser:appuser /tmp/uv-cache
 
 # Switch to non-root user
 USER appuser
