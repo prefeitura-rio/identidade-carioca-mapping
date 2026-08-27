@@ -37,7 +37,7 @@ spec:
     resources:
       requests: { memory: 256Mi, cpu: 1000m }
       limits: { memory: 1024Mi, cpu: 2000m }
-    healthCheck: { path: /readyz }
+    healthCheck: { path: /api/v1/readyz }
     podSecurityContext: { fsGroup: 1000 }
     securityContext:
       runAsUser: 1000
