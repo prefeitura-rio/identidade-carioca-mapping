@@ -69,3 +69,7 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=10s --retries=3 \
 
 # Command to run background tasks with APScheduler
 CMD ["/app/.venv/bin/python", "-m", "app.background_tasks"]
+
+# The default published image is the HTTP API. Background tasks remain
+# available as an explicit build target for dedicated workers.
+FROM api AS final
