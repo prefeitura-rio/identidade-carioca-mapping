@@ -57,7 +57,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/healthz || exit 1
 
 # Command to run FastAPI with uvicorn
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 # Stage 3: Background tasks service
 FROM base AS background
@@ -68,4 +68,4 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=10s --retries=3 \
     CMD pgrep -f "python -m app.background_tasks" || exit 1
 
 # Command to run background tasks with APScheduler
-CMD ["uv", "run", "python", "-m", "app.background_tasks"]
+CMD ["/app/.venv/bin/python", "-m", "app.background_tasks"]
