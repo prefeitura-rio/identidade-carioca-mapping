@@ -11,6 +11,10 @@ from typing import Any
 import redis
 
 from app.services.base import BaseService
+from app.services.pattern_matching import path_pattern_to_regex
+from app.services.redis_mapping_keys import LOOKUP_CACHE_PREFIX, MAPPING_ALL_KEY
+from app.services.redis_mapping_keys import pattern_key as _pattern_key
+from app.services.redis_mapping_rebuild import MappingProjectionRebuilder
 from app.settings import settings
 
 
@@ -22,6 +26,7 @@ class RedisMappingService(BaseService):
 
         # Import here to avoid circular dependency
         from app.services.cache import CacheService
+
         self._cache_service = CacheService()
 
         # Configuration
@@ -32,16 +37,23 @@ class RedisMappingService(BaseService):
         """Get Redis client from cache service to reuse connection."""
         return self._cache_service._get_redis_connection()
 
+    def _serialize_mapping(self, mapping_data: dict[str, Any]) -> str:
+        """Build the JSON payload stored per mapping, including `match_regex`.
+
+        `match_regex` is derived fresh from `path_pattern` every time so it
+        can never drift from the canonical conversion in
+        `app.services.pattern_matching`. Existing consumers that only read
+        `path_pattern`/`action_name`/etc. are unaffected - this only adds a
+        field to the JSON object.
+        """
+        payload = {
+            **mapping_data,
+            "match_regex": path_pattern_to_regex(mapping_data["path_pattern"]),
+        }
+        return json.dumps(payload)
+
     def store_mapping(self, mapping_data: dict[str, Any]) -> bool:
-        """
-        Store mapping in permanent Redis storage and update pattern lists.
-
-        Args:
-            mapping_data: Complete mapping information including id, method, path_pattern, etc.
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Store `mapping_data` in the permanent hash and update its pattern list."""
         with self.trace_operation(
             "store_mapping",
             {
@@ -58,10 +70,12 @@ class RedisMappingService(BaseService):
 
                 # Store mapping details in permanent hash (no TTL)
                 mapping_key = f"mapping_{mapping_id}"
-                redis_conn.hset("heimdall:mappings:all", mapping_key, json.dumps(mapping_data))
+                redis_conn.hset(
+                    MAPPING_ALL_KEY, mapping_key, self._serialize_mapping(mapping_data)
+                )
 
                 # Update pattern list for the method (maintain order by specificity)
-                pattern_key = f"heimdall:mappings:patterns:{method}"
+                pattern_key = _pattern_key(method)
 
                 # Remove from list if already exists (in case of update)
                 redis_conn.lrem(pattern_key, 0, mapping_key)
@@ -82,16 +96,7 @@ class RedisMappingService(BaseService):
                 return False
 
     def remove_mapping(self, mapping_id: int, method: str) -> bool:
-        """
-        Remove mapping from permanent Redis storage and pattern lists.
-
-        Args:
-            mapping_id: The mapping ID to remove
-            method: HTTP method for pattern list cleanup
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Remove a mapping from the permanent hash and its pattern list."""
         with self.trace_operation(
             "remove_mapping",
             {
@@ -105,10 +110,10 @@ class RedisMappingService(BaseService):
                 mapping_key = f"mapping_{mapping_id}"
 
                 # Remove from main storage
-                removed_count = redis_conn.hdel("heimdall:mappings:all", mapping_key)
+                removed_count = redis_conn.hdel(MAPPING_ALL_KEY, mapping_key)
 
                 # Remove from pattern list
-                pattern_key = f"heimdall:mappings:patterns:{method}"
+                pattern_key = _pattern_key(method)
                 redis_conn.lrem(pattern_key, 0, mapping_key)
 
                 # Invalidate any cached lookups that might reference this mapping
@@ -126,17 +131,7 @@ class RedisMappingService(BaseService):
                 return False
 
     def resolve_mapping_fast(self, method: str, path: str) -> dict[str, Any] | None:
-        """
-        Resolve mapping using fast path (cache) + pattern matching fallback.
-        Implements the algorithm documented in REDIS_MAPPING_QUERY_GUIDE.md.
-
-        Args:
-            method: HTTP method (GET, POST, etc.)
-            path: Request path to match
-
-        Returns:
-            dict: Mapping data if found, None otherwise
-        """
+        """Resolve via lookup cache, falling back to pattern matching (REDIS_MAPPING_QUERY_GUIDE.md)."""
         with self.trace_operation(
             "resolve_mapping_fast",
             {
@@ -150,21 +145,25 @@ class RedisMappingService(BaseService):
 
                 # Step 1: Check cache for exact path match
                 if self.cache_ttl > 0:  # Only use cache if TTL > 0
-                    cache_key = f"heimdall:mappings:lookup:{method}:{path}"
+                    cache_key = f"{LOOKUP_CACHE_PREFIX}{method}:{path}"
                     cached_mapping_id = redis_conn.get(cache_key)
 
                     if cached_mapping_id:
                         # Get mapping details from permanent storage
-                        mapping_data = redis_conn.hget("heimdall:mappings:all", cached_mapping_id.decode())
+                        mapping_data = redis_conn.hget(
+                            MAPPING_ALL_KEY, cached_mapping_id.decode()
+                        )
                         if mapping_data:
                             span.set_attribute("redis_mapping.cache_hit", True)
-                            span.set_attribute("redis_mapping.mapping_id", cached_mapping_id.decode())
+                            span.set_attribute(
+                                "redis_mapping.mapping_id", cached_mapping_id.decode()
+                            )
                             return json.loads(mapping_data)
 
                 span.set_attribute("redis_mapping.cache_hit", False)
 
                 # Step 2: Pattern matching fallback
-                pattern_key = f"heimdall:mappings:patterns:{method}"
+                pattern_key = _pattern_key(method)
                 mapping_ids = redis_conn.lrange(pattern_key, 0, -1)
 
                 span.set_attribute("redis_mapping.patterns_to_check", len(mapping_ids))
@@ -173,7 +172,7 @@ class RedisMappingService(BaseService):
                     mapping_id = mapping_id_bytes.decode()
 
                     # Get mapping details
-                    mapping_data_str = redis_conn.hget("heimdall:mappings:all", mapping_id)
+                    mapping_data_str = redis_conn.hget(MAPPING_ALL_KEY, mapping_id)
                     if not mapping_data_str:
                         continue
 
@@ -183,15 +182,25 @@ class RedisMappingService(BaseService):
                     if not path_pattern:
                         continue
 
+                    # Cold-projection tolerance: entries written before
+                    # `match_regex` existed (or a legacy payload) fall back to
+                    # deriving it on the fly. This is read-only - it is never
+                    # written back to Redis, so PostgreSQL stays the only
+                    # writer of mapping data outside the dedicated rebuild.
+                    match_regex = mapping_data.get(
+                        "match_regex"
+                    ) or path_pattern_to_regex(path_pattern)
+
                     try:
-                        # Test if request path matches the pattern
-                        if re.match(path_pattern, path):
-                            span.set_attribute("redis_mapping.matched_pattern", path_pattern)
+                        if re.match(match_regex, path):
+                            span.set_attribute(
+                                "redis_mapping.matched_pattern", path_pattern
+                            )
                             span.set_attribute("redis_mapping.mapping_id", mapping_id)
 
                             # Cache the result for future lookups (if caching enabled)
                             if self.cache_ttl > 0:
-                                cache_key = f"heimdall:mappings:lookup:{method}:{path}"
+                                cache_key = f"{LOOKUP_CACHE_PREFIX}{method}:{path}"
                                 redis_conn.setex(cache_key, self.cache_ttl, mapping_id)
                                 span.set_attribute("redis_mapping.result_cached", True)
 
@@ -199,7 +208,9 @@ class RedisMappingService(BaseService):
 
                     except re.error as regex_error:
                         span.record_exception(regex_error)
-                        span.set_attribute("redis_mapping.regex_error", str(regex_error))
+                        span.set_attribute(
+                            "redis_mapping.regex_error", str(regex_error)
+                        )
                         continue
 
                 span.set_attribute("redis_mapping.no_match", True)
@@ -211,27 +222,25 @@ class RedisMappingService(BaseService):
                 return None
 
     def get_all_mappings(self) -> list[dict[str, Any]]:
-        """
-        Get all mappings from permanent storage.
-
-        Returns:
-            list: All mapping data
-        """
+        """Get all mappings from permanent storage."""
         with self.trace_operation(
             "get_all_mappings",
             {"redis_mapping.operation": "get_all"},
         ) as span:
             try:
                 redis_conn = self.redis_client
-                all_mappings_data = redis_conn.hgetall("heimdall:mappings:all")
+                all_mappings_data = redis_conn.hgetall(MAPPING_ALL_KEY)
 
                 mappings = []
                 for mapping_data_str in all_mappings_data.values():
                     try:
                         mapping_data = json.loads(mapping_data_str)
-                        mappings.append(mapping_data)
                     except json.JSONDecodeError:
                         continue
+                    # Skip non-mapping bookkeeping entries (e.g. the rebuild's
+                    # empty-projection marker), which never carry an "id".
+                    if "id" in mapping_data:
+                        mappings.append(mapping_data)
 
                 span.set_attribute("redis_mapping.mappings_count", len(mappings))
                 return mappings
@@ -242,13 +251,7 @@ class RedisMappingService(BaseService):
                 return []
 
     def invalidate_lookup_cache(self) -> bool:
-        """
-        Invalidate all lookup cache entries (with TTL).
-        Preserves permanent data, only clears the cache layer.
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Clear all TTL'd lookup cache entries; permanent mapping data is untouched."""
         with self.trace_operation(
             "invalidate_lookup_cache",
             {"redis_mapping.operation": "invalidate_cache"},
@@ -257,10 +260,12 @@ class RedisMappingService(BaseService):
                 redis_conn = self.redis_client
 
                 # Find and delete all lookup cache keys
-                cache_keys = redis_conn.keys("heimdall:mappings:lookup:*")
+                cache_keys = redis_conn.keys(f"{LOOKUP_CACHE_PREFIX}*")
                 if cache_keys:
                     deleted_count = redis_conn.delete(*cache_keys)
-                    span.set_attribute("redis_mapping.cache_keys_deleted", deleted_count)
+                    span.set_attribute(
+                        "redis_mapping.cache_keys_deleted", deleted_count
+                    )
                 else:
                     span.set_attribute("redis_mapping.cache_keys_deleted", 0)
 
@@ -274,16 +279,7 @@ class RedisMappingService(BaseService):
                 return False
 
     def sync_all_mappings_from_db(self, mappings: list[dict[str, Any]]) -> bool:
-        """
-        Sync all mappings from database to Redis.
-        This rebuilds the entire Redis mapping storage.
-
-        Args:
-            mappings: List of mapping data from database
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Atomically rebuild the Redis projection from `mappings` (see `redis_mapping_rebuild`)."""
         with self.trace_operation(
             "sync_all_mappings_from_db",
             {
@@ -292,42 +288,26 @@ class RedisMappingService(BaseService):
             },
         ) as span:
             try:
-                redis_conn = self.redis_client
-
-                # Clear existing data
-                redis_conn.delete("heimdall:mappings:all")
-
-                # Clear pattern lists for all methods
-                pattern_keys = redis_conn.keys("heimdall:mappings:patterns:*")
-                if pattern_keys:
-                    redis_conn.delete(*pattern_keys)
-
-                # Store all mappings
-                for mapping_data in mappings:
-                    if not self.store_mapping(mapping_data):
-                        span.set_attribute("redis_mapping.sync_failed", True)
-                        return False
-
-                # Invalidate lookup cache
-                self.invalidate_lookup_cache()
+                rebuilder = MappingProjectionRebuilder(
+                    self.redis_client, self._serialize_mapping
+                )
+                cleared_methods = rebuilder.rebuild(mappings)
 
                 span.set_attribute("redis_mapping.sync_successful", True)
                 span.set_attribute("redis_mapping.synced_count", len(mappings))
+                span.set_attribute(
+                    "redis_mapping.methods_cleared", len(cleared_methods)
+                )
                 return True
 
-            except Exception as e:
+            except redis.RedisError as e:
                 span.record_exception(e)
                 span.set_attribute("redis_mapping.error", str(e))
                 span.set_attribute("redis_mapping.sync_failed", True)
                 return False
 
     def health_check(self) -> bool:
-        """
-        Check Redis mapping storage health.
-
-        Returns:
-            bool: True if healthy, False otherwise
-        """
+        """Check Redis mapping storage health."""
         with self.trace_operation(
             "health_check",
             {"redis_mapping.operation": "health_check"},
