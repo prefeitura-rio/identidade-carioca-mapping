@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: Heimdall Admin Service
-  description: '# Heimdall Admin Service API
+  title: Identidade Carioca Mapping Service
+  description: '# Identidade Carioca Mapping Service
 
 
     A comprehensive admin service for user and group management with authorization
@@ -11,24 +11,10 @@ info:
     ## Features
 
 
-    - **User Management**: Automatic user creation from JWT tokens with role-based
-    access control
+    - **Mapping Resolution**: Resolve API endpoint and method pairs to authorization
+    actions
 
-    - **Group Management**: Create, manage, and assign users to groups with hierarchical
-    permissions
-
-    - **Role Management**: Define and assign roles to users and groups
-
-    - **Mapping Management**: Configure API endpoint to action mappings for authorization
-
-    - **Action Management**: Define available actions for fine-grained permission
-    control
-
-    - **Cerbos Integration**: Policy-based authorization with external Cerbos service
-
-    - **Audit Logging**: Comprehensive audit trail for all administrative operations
-
-    - **Redis Caching**: High-performance caching for frequently accessed data'
+    - **Redis Caching**: High-performance mapping lookup for authorization middleware'
   version: 1.0.0
 paths:
   /api/v1/healthz:
@@ -2504,6 +2490,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/resolve:
+    post:
+      tags:
+      - mappings
+      summary: Resolve an endpoint to an action
+      description: Resolve one endpoint/method pair for authorization middleware.
+      operationId: resolve_endpoint_api_v1_resolve_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MappingResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
 components:
   schemas:
     ActionCreateRequest:
@@ -3034,6 +3048,30 @@ components:
       - limit
       - has_more
       title: PaginatedResponse[UserResponse]
+    ResolveRequest:
+      properties:
+        path:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Path
+        method:
+          type: string
+          enum:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - HEAD
+          - OPTIONS
+          title: Method
+      type: object
+      required:
+      - path
+      - method
+      title: ResolveRequest
+      description: Request model for the service-to-service resolve contract.
     RoleActionRequest:
       properties:
         action_name:
