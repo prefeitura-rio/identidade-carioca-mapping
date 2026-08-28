@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: identidade-carioca-mapping-rebuild-projection
+  namespace: identidade-carioca-mapping
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: rebuild-projection
+          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-dbc5098d2b097ad3bbec0f05edd03f5f0a04698e@sha256:d1f90399608fc212db8995ee7a2edf9dede962f9aa5bd5ee8d7b84e08c1f301c
+          command: ["/app/.venv/bin/python"]
+          args: ["-m", "app.rebuild_mapping_projection"]
+          envFrom:
+            - secretRef:
+                name: heimdall-secrets

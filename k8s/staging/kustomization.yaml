@@ -5,3 +5,4 @@ resources:
   - helmrelease.yaml
   - migration-job.yaml
   - mapping-seed-job.yaml
+  - mapping-projection-rebuild-job.yaml
