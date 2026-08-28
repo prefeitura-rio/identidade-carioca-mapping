@@ -15,6 +15,7 @@ from app.services.audit import AuditService
 from app.services.base import BaseService
 from app.services.cache import CacheService
 from app.services.cerbos import CerbosService
+from app.services.pattern_matching import path_pattern_to_regex
 from app.services.redis_mapping import RedisMappingService
 
 
@@ -32,9 +33,20 @@ class MappingService(BaseService):
         self, db: Session, path: str, method: str
     ) -> dict[str, Any] | None:
         """
-        Resolve path and method to action using Redis mapping persistence with fallback to database.
-        Returns mapping information for adapter usage.
+        Resolve path and method to action from the Redis mapping projection only.
+
+        `db` is accepted (and unused here) purely for call-site/interface
+        stability with the router and the rest of `MappingService`'s CRUD
+        methods, which still need a session. PostgreSQL is never queried by
+        this method: a Redis miss means "no mapping in the current
+        projection" and returns None immediately. PostgreSQL access is
+        confined to the dedicated rebuild path
+        (`sync_all_mappings_to_redis`/`MappingProjectionRebuilder`) and to
+        the CRUD endpoints - a resolver-side cache miss can therefore never
+        mask a stale or partially-rebuilt projection behind a fallback
+        query or a fresh write.
         """
+        del db
         with self.trace_operation(
             "resolve_mapping",
             {
@@ -44,81 +56,28 @@ class MappingService(BaseService):
             },
         ) as span:
             try:
-                # Try Redis mapping service first (fast path + pattern matching)
-                redis_result = self.redis_mapping_service.resolve_mapping_fast(method, path)
-                if redis_result:
-                    span.set_attribute("mapping.redis_hit", True)
-                    span.set_attribute("mapping.matched_action", redis_result.get("action_name"))
-                    span.set_attribute("mapping.mapping_id", redis_result.get("id"))
-
-                    # Convert Redis format to expected format for backward compatibility
-                    result = {
-                        "mapping_id": redis_result.get("id"),
-                        "action": redis_result.get("action_name"),
-                        "path_pattern": redis_result.get("path_pattern"),
-                        "method": redis_result.get("method"),
-                        "description": redis_result.get("description"),
-                    }
-                    return result
-
-                span.set_attribute("mapping.redis_hit", False)
-
-                # Fallback to database query (original logic)
-                # Query all endpoints for the given method or 'ANY'
-                endpoints = (
-                    db.query(Endpoint)
-                    .filter(Endpoint.method.in_([method, "ANY"]))
-                    .join(Action)
-                    .all()
+                redis_result = self.redis_mapping_service.resolve_mapping_fast(
+                    method, path
                 )
+                if not redis_result:
+                    span.set_attribute("mapping.redis_hit", False)
+                    span.set_attribute("mapping.no_match", True)
+                    return None
 
-                span.set_attribute("mapping.candidates_count", len(endpoints))
+                span.set_attribute("mapping.redis_hit", True)
+                span.set_attribute(
+                    "mapping.matched_action", redis_result.get("action_name")
+                )
+                span.set_attribute("mapping.mapping_id", redis_result.get("id"))
 
-                # Try to match path patterns using regex
-                for endpoint in endpoints:
-                    try:
-                        # Convert path pattern to regex if it's not already
-                        pattern = self._convert_pattern_to_regex(endpoint.path_pattern)
-
-                        if re.match(pattern, path):
-                            span.set_attribute(
-                                "mapping.matched_pattern", endpoint.path_pattern
-                            )
-                            span.set_attribute(
-                                "mapping.matched_action", endpoint.action.name
-                            )
-                            span.set_attribute("mapping.mapping_id", endpoint.id)
-
-                            result = {
-                                "mapping_id": endpoint.id,
-                                "action": endpoint.action.name,
-                                "path_pattern": endpoint.path_pattern,
-                                "method": endpoint.method,
-                                "description": endpoint.description,
-                            }
-
-                            # Store in Redis for future lookups
-                            mapping_data = {
-                                "id": endpoint.id,
-                                "method": endpoint.method,
-                                "path_pattern": endpoint.path_pattern,
-                                "action_id": endpoint.action_id,
-                                "action_name": endpoint.action.name,
-                                "description": endpoint.description,
-                                "created_at": endpoint.created_at.isoformat() if endpoint.created_at else None,
-                                "updated_at": endpoint.updated_at.isoformat() if endpoint.updated_at else None,
-                            }
-                            self.redis_mapping_service.store_mapping(mapping_data)
-                            span.set_attribute("mapping.stored_in_redis", True)
-
-                            return result
-                    except re.error as e:
-                        span.record_exception(e)
-                        span.set_attribute("mapping.pattern_error", str(e))
-                        continue
-
-                span.set_attribute("mapping.no_match", True)
-                return None
+                # Convert Redis format to expected format for backward compatibility
+                return {
+                    "mapping_id": redis_result.get("id"),
+                    "action": redis_result.get("action_name"),
+                    "path_pattern": redis_result.get("path_pattern"),
+                    "method": redis_result.get("method"),
+                    "description": redis_result.get("description"),
+                }
 
             except Exception as e:
                 span.record_exception(e)
@@ -152,7 +111,7 @@ class MappingService(BaseService):
             try:
                 # Validate the regex pattern
                 try:
-                    pattern = self._convert_pattern_to_regex(path_pattern)
+                    pattern = path_pattern_to_regex(path_pattern)
                     re.compile(pattern)
                 except re.error as e:
                     span.set_attribute("mapping.invalid_pattern", True)
@@ -202,8 +161,12 @@ class MappingService(BaseService):
                     "action_id": endpoint.action_id,
                     "action_name": action.name,
                     "description": endpoint.description,
-                    "created_at": endpoint.created_at.isoformat() if endpoint.created_at else None,
-                    "updated_at": endpoint.updated_at.isoformat() if endpoint.updated_at else None,
+                    "created_at": endpoint.created_at.isoformat()
+                    if endpoint.created_at
+                    else None,
+                    "updated_at": endpoint.updated_at.isoformat()
+                    if endpoint.updated_at
+                    else None,
                 }
                 redis_stored = self.redis_mapping_service.store_mapping(mapping_data)
                 span.set_attribute("mapping.redis_stored", redis_stored)
@@ -252,7 +215,7 @@ class MappingService(BaseService):
                 # Try to get action name if action lookup succeeded
                 action_name = None
                 try:
-                    if 'action' in locals():
+                    if "action" in locals():
                         action_name = action.name
                 except Exception:
                     pass
@@ -310,7 +273,7 @@ class MappingService(BaseService):
                 if path_pattern is not None:
                     # Validate the regex pattern
                     try:
-                        pattern = self._convert_pattern_to_regex(path_pattern)
+                        pattern = path_pattern_to_regex(path_pattern)
                         re.compile(pattern)
                     except re.error as e:
                         span.set_attribute("mapping.invalid_pattern", True)
@@ -349,10 +312,16 @@ class MappingService(BaseService):
                         "action_id": endpoint.action_id,
                         "action_name": endpoint.action.name,
                         "description": endpoint.description,
-                        "created_at": endpoint.created_at.isoformat() if endpoint.created_at else None,
-                        "updated_at": endpoint.updated_at.isoformat() if endpoint.updated_at else None,
+                        "created_at": endpoint.created_at.isoformat()
+                        if endpoint.created_at
+                        else None,
+                        "updated_at": endpoint.updated_at.isoformat()
+                        if endpoint.updated_at
+                        else None,
                     }
-                    redis_stored = self.redis_mapping_service.store_mapping(mapping_data)
+                    redis_stored = self.redis_mapping_service.store_mapping(
+                        mapping_data
+                    )
                     span.set_attribute("mapping.redis_updated", redis_stored)
 
                     # Invalidate old mapping cache after update
@@ -401,7 +370,7 @@ class MappingService(BaseService):
                 # Try to get action name if action lookup succeeded
                 action_name = None
                 try:
-                    if 'action' in locals():
+                    if "action" in locals():
                         action_name = action.name
                 except Exception:
                     pass
@@ -452,7 +421,9 @@ class MappingService(BaseService):
                 db.commit()
 
                 # Remove from Redis mapping persistence
-                redis_removed = self.redis_mapping_service.remove_mapping(mapping_id, method)
+                redis_removed = self.redis_mapping_service.remove_mapping(
+                    mapping_id, method
+                )
                 span.set_attribute("mapping.redis_removed", redis_removed)
 
                 # Invalidate old mapping cache after deletion
@@ -527,45 +498,6 @@ class MappingService(BaseService):
                 span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
                 raise
 
-    def _convert_pattern_to_regex(self, path_pattern: str) -> str:
-        """
-        Convert a simple path pattern to a full regex pattern.
-        Supports:
-        - * for any characters within a path segment
-        - ** for any path segments
-        - :param for named parameters
-        - Raw regex patterns with parentheses for capture groups
-        """
-        # Check if this looks like a raw regex pattern (contains unescaped parentheses)
-        if '(' in path_pattern and ')' in path_pattern:
-            # Treat as raw regex, just ensure anchors
-            pattern = path_pattern
-            if not pattern.startswith("^"):
-                pattern = "^" + pattern
-            if not pattern.endswith("$"):
-                pattern = pattern + "$"
-            return pattern
-
-        # Escape special regex characters except *, ?, and :
-        pattern = re.escape(path_pattern)
-
-        # Handle path parameters like :id -> [^/]+
-        pattern = re.sub(r"\\:([a-zA-Z_][a-zA-Z0-9_]*)", r"(?P<\1>[^/]+)", pattern)
-
-        # Handle ** for multiple path segments
-        pattern = pattern.replace(r"\*\*", ".*")
-
-        # Handle * for single path segment
-        pattern = pattern.replace(r"\*", "[^/]*")
-
-        # Ensure exact match
-        if not pattern.startswith("^"):
-            pattern = "^" + pattern
-        if not pattern.endswith("$"):
-            pattern = pattern + "$"
-
-        return pattern
-
     def sync_all_mappings_to_redis(self, db: Session) -> bool:
         """
         Sync all mappings from database to Redis.
@@ -583,11 +515,7 @@ class MappingService(BaseService):
         ) as span:
             try:
                 # Get all endpoints with their actions
-                endpoints = (
-                    db.query(Endpoint)
-                    .join(Action)
-                    .all()
-                )
+                endpoints = db.query(Endpoint).join(Action).all()
 
                 # Convert to mapping data format
                 mappings_data = []
@@ -599,13 +527,19 @@ class MappingService(BaseService):
                         "action_id": endpoint.action_id,
                         "action_name": endpoint.action.name,
                         "description": endpoint.description,
-                        "created_at": endpoint.created_at.isoformat() if endpoint.created_at else None,
-                        "updated_at": endpoint.updated_at.isoformat() if endpoint.updated_at else None,
+                        "created_at": endpoint.created_at.isoformat()
+                        if endpoint.created_at
+                        else None,
+                        "updated_at": endpoint.updated_at.isoformat()
+                        if endpoint.updated_at
+                        else None,
                     }
                     mappings_data.append(mapping_data)
 
                 # Sync to Redis
-                success = self.redis_mapping_service.sync_all_mappings_from_db(mappings_data)
+                success = self.redis_mapping_service.sync_all_mappings_from_db(
+                    mappings_data
+                )
 
                 span.set_attribute("mapping.total_mappings", len(mappings_data))
                 span.set_attribute("mapping.sync_successful", success)
