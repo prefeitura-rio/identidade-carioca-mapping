@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: identidade-carioca-mapping-rebuild-projection
+  name: identidade-carioca-mapping-rebuild-projection-v2
   namespace: identidade-carioca-mapping
 spec:
   backoffLimit: 6

@@ -28,7 +28,7 @@ spec:
     fullnameOverride: identidade-carioca-mapping
     image:
       repository: ghcr.io/prefeitura-rio/identidade-carioca-mapping
-       tag: sha-1c9b241fe8cda7ba20ea5709043f6b69e03c82f5@sha256:4b822b6ba6cc47c4bf05d7ae59f0b1fd7007c61ae78bb93537c42fd97349d87c
+      tag: sha-1c9b241fe8cda7ba20ea5709043f6b69e03c82f5@sha256:4b822b6ba6cc47c4bf05d7ae59f0b1fd7007c61ae78bb93537c42fd97349d87c
       pullPolicy: IfNotPresent
     service:
       type: ClusterIP
