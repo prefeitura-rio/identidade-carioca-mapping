@@ -3,3 +3,4 @@ kind: Kustomization
 namespace: identidade-carioca-mapping
 resources:
   - helmrelease.yaml
+  - migration-job.yaml
