@@ -1,6 +1,11 @@
 import pytest
 
-from app.catalog.rmi import CatalogCollisionError, import_rmi_catalog, parse_rmi_catalog
+from app.catalog.openapi import (
+    CatalogCollisionError,
+    OpenApiCatalog,
+    import_openapi_catalog,
+    parse_openapi_catalog,
+)
 from app.models import Action, Endpoint
 
 
@@ -29,8 +34,23 @@ def _document() -> dict[str, object]:
     }
 
 
-def test_parse_rmi_catalog_derives_stable_actions_and_staging_server() -> None:
-    catalog = parse_rmi_catalog(_document(), environment="staging", source_revision="rev")
+def _catalog(environment: str = "staging") -> OpenApiCatalog:
+    return parse_openapi_catalog(
+        _document(),
+        catalog_name="rmi",
+        api_version="v1",
+        environment=environment,
+        server_url=(
+            "https://services.staging.app.dados.rio/rmi/v1"
+            if environment == "staging"
+            else "https://services.pref.rio/rmi/v1"
+        ),
+        source_revision="rev",
+    )
+
+
+def test_parse_openapi_catalog_derives_stable_actions_and_staging_server() -> None:
+    catalog = _catalog()
 
     assert catalog.base_url == "https://services.staging.app.dados.rio/rmi/v1"
     assert catalog.source_revision == "rev"
@@ -45,13 +65,15 @@ def test_parse_rmi_catalog_derives_stable_actions_and_staging_server() -> None:
     assert health.classification == "health"
 
 
-def test_parse_rmi_catalog_selects_production_server_separately() -> None:
-    catalog = parse_rmi_catalog(_document(), environment="production", source_revision="rev")
+def test_parse_openapi_catalog_selects_production_server_separately() -> None:
+    catalog = _catalog("production")
 
     assert catalog.base_url == "https://services.pref.rio/rmi/v1"
 
 
-def test_import_rmi_catalog_is_idempotent_and_preserves_synthetic_mapping(db_session) -> None:
+def test_import_openapi_catalog_is_idempotent_and_preserves_synthetic_mapping(
+    db_session,
+) -> None:
     synthetic_action = Action(name="identity:health", description="synthetic")
     db_session.add(synthetic_action)
     db_session.flush()
@@ -64,10 +86,10 @@ def test_import_rmi_catalog_is_idempotent_and_preserves_synthetic_mapping(db_ses
         )
     )
     db_session.commit()
-    catalog = parse_rmi_catalog(_document(), environment="staging", source_revision="rev")
+    catalog = _catalog()
 
-    first = import_rmi_catalog(db_session, catalog)
-    second = import_rmi_catalog(db_session, catalog)
+    first = import_openapi_catalog(db_session, catalog)
+    second = import_openapi_catalog(db_session, catalog)
 
     assert first.created_actions == 3
     assert first.created_bindings == 3
@@ -78,7 +100,7 @@ def test_import_rmi_catalog_is_idempotent_and_preserves_synthetic_mapping(db_ses
     assert db_session.query(Endpoint).filter_by(path_pattern="/api/v1/healthz").count() == 1
 
 
-def test_import_rmi_catalog_rejects_binding_collision(db_session) -> None:
+def test_import_openapi_catalog_rejects_binding_collision(db_session) -> None:
     existing_action = Action(name="different.action")
     db_session.add(existing_action)
     db_session.flush()
@@ -91,7 +113,7 @@ def test_import_rmi_catalog_rejects_binding_collision(db_session) -> None:
         )
     )
     db_session.commit()
-    catalog = parse_rmi_catalog(_document(), environment="staging", source_revision="rev")
+    catalog = _catalog()
 
     with pytest.raises(CatalogCollisionError):
-        import_rmi_catalog(db_session, catalog)
+        import_openapi_catalog(db_session, catalog)

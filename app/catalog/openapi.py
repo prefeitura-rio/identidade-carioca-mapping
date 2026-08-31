@@ -13,7 +13,6 @@ from app.models import Action, Endpoint
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-CatalogEnvironment = Literal["staging", "production"]
 CatalogClassification = Literal[
     "business", "admin", "operational", "health", "metrics"
 ]
@@ -64,7 +63,10 @@ class CatalogEntry:
 
 
 @dataclass(frozen=True, slots=True)
-class RmiCatalog:
+class OpenApiCatalog:
+    catalog_name: str
+    api_version: str
+    environment: str
     base_url: str
     source_revision: str
     entries: tuple[CatalogEntry, ...]
@@ -76,18 +78,21 @@ class CatalogImportResult:
     created_bindings: int
 
 
-def parse_rmi_catalog(
+def parse_openapi_catalog(
     document: object,
     *,
-    environment: CatalogEnvironment,
+    catalog_name: str,
+    api_version: str,
+    environment: str,
+    server_url: str,
     source_revision: str,
-) -> RmiCatalog:
+) -> OpenApiCatalog:
     parsed = (
         _OpenApiDocument.model_validate_json(document)
         if isinstance(document, str)
         else _OpenApiDocument.model_validate(document)
     )
-    base_url = _select_server(parsed.servers, environment)
+    base_url = _select_server(parsed.servers, server_url)
     operation_adapter = TypeAdapter(_OpenApiOperation)
     entries: list[CatalogEntry] = []
 
@@ -98,40 +103,49 @@ def parse_rmi_catalog(
             classification = _classify(path, operation.tags)
             entries.append(
                 CatalogEntry(
-                    action_name=_action_name(method, path),
+                    action_name=_action_name(catalog_name, api_version, method, path),
                     method=method.upper(),
                     path=path,
                     path_pattern=_resolver_path(path),
                     classification=classification,
                     description=_description(
-                        operation, classification, source_revision
+                        catalog_name, operation, classification, source_revision
                     ),
                 )
             )
 
-    return RmiCatalog(
+    return OpenApiCatalog(
+        catalog_name=catalog_name,
+        api_version=api_version,
+        environment=environment,
         base_url=base_url,
         source_revision=source_revision,
         entries=tuple(entries),
     )
 
 
-def fetch_rmi_catalog(
+def fetch_openapi_catalog(
     source_url: str,
     *,
-    environment: CatalogEnvironment,
+    catalog_name: str,
+    api_version: str,
+    environment: str,
+    server_url: str,
     source_revision: str,
-) -> RmiCatalog:
+) -> OpenApiCatalog:
     response = requests.get(source_url, timeout=(5, 30))
     response.raise_for_status()
-    return parse_rmi_catalog(
+    return parse_openapi_catalog(
         response.text,
+        catalog_name=catalog_name,
+        api_version=api_version,
         environment=environment,
+        server_url=server_url,
         source_revision=source_revision,
     )
 
 
-def import_rmi_catalog(db: Session, catalog: RmiCatalog) -> CatalogImportResult:
+def import_openapi_catalog(db: Session, catalog: OpenApiCatalog) -> CatalogImportResult:
     actions_by_name: dict[str, Action | None] = {}
     endpoints_by_binding: dict[tuple[str, str], Endpoint | None] = {}
 
@@ -186,31 +200,24 @@ def import_rmi_catalog(db: Session, catalog: RmiCatalog) -> CatalogImportResult:
     return CatalogImportResult(created_actions, created_bindings)
 
 
-def _select_server(
-    servers: list[_OpenApiServer], environment: CatalogEnvironment
-) -> str:
-    expected_host = (
-        "services.staging.app.dados.rio"
-        if environment == "staging"
-        else "services.pref.rio"
-    )
+def _select_server(servers: list[_OpenApiServer], expected_url: str) -> str:
     matches = [
         server.url.rstrip("/")
         for server in servers
-        if urlsplit(server.url).hostname == expected_host
+        if urlsplit(server.url).geturl().rstrip("/") == expected_url.rstrip("/")
     ]
     if len(matches) != 1:
         raise ValueError(
-            f"Expected exactly one RMI {environment} server for {expected_host}, "
+            f"Expected exactly one OpenAPI server for {expected_url}, "
             f"found {len(matches)}"
         )
     return matches[0]
 
 
-def _action_name(method: str, path: str) -> str:
+def _action_name(catalog_name: str, api_version: str, method: str, path: str) -> str:
     segments = [_normalize_segment(segment) for segment in path.split("/") if segment]
     path_name = ".".join(segments) or "root"
-    return f"rmi.v1.{method.lower()}.{path_name}"
+    return f"{catalog_name}.{api_version}.{method.lower()}.{path_name}"
 
 
 def _normalize_segment(segment: str) -> str:
@@ -242,10 +249,11 @@ def _classify(
 
 
 def _description(
+    catalog_name: str,
     operation: _OpenApiOperation,
     classification: CatalogClassification,
     source_revision: str,
 ) -> str:
     title = operation.summary or operation.description or "RMI operation"
     tags = ",".join(operation.tags) or "untagged"
-    return f"RMI {classification}; source={source_revision}; tags={tags}; {title}"
+    return f"{catalog_name} {classification}; source={source_revision}; tags={tags}; {title}"

@@ -6,4 +6,4 @@ resources:
   - migration-job.yaml
   - mapping-seed-job.yaml
   - mapping-projection-rebuild-job.yaml
-  - rmi-catalog-import-job.yaml
+  - openapi-catalog-import-job.yaml
