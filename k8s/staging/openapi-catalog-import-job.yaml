@@ -17,7 +17,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: openapi-catalog-import
-          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-4bf0d372bd7ee834be6a9447439a640717330d12@sha256:78814f67ecebcd359ea9cf81fb4fdd4935e68971efbc129aa37f6a34cd34c79b
+          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-e92ba45afcdbafbcb1ea1ca05437d969c2403e7f@sha256:ceef613e3221cfd8e6bf81eda3deb5adb6582784685c0dabbccaba4b8e10c30a
           command: ["/app/.venv/bin/python"]
           args: ["-m", "app.import_openapi_catalog"]
           env:
