@@ -45,6 +45,11 @@ spec:
       readOnlyRootFilesystem: true
     envFrom:
       - secretRef: { name: heimdall-secrets }
+    env:
+      - name: REDIS_SENTINEL_HOSTS
+        value: redis.cerbos-redis.svc.cluster.local:26379
+      - name: REDIS_SENTINEL_SERVICE_NAME
+        value: mymaster
     infisicalSecret:
       enabled: true
       secretName: heimdall-secrets
