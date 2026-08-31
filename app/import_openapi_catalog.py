@@ -44,12 +44,14 @@ def main() -> int:
             level=20,
             message="OpenAPI catalog import completed successfully",
             operation="openapi_catalog_import_success",
-            environment=environment,
-            source_revision=source_revision,
-            base_url=catalog.base_url,
-            entry_count=len(catalog.entries),
-            created_actions=result.created_actions,
-            created_bindings=result.created_bindings,
+            extra_fields={
+                "environment": environment,
+                "source_revision": source_revision,
+                "base_url": catalog.base_url,
+                "entry_count": len(catalog.entries),
+                "created_actions": result.created_actions,
+                "created_bindings": result.created_bindings,
+            },
         )
         return 0
     except Exception as error:
