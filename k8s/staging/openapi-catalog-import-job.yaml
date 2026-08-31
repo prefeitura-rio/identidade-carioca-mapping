@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: openapi-catalog-import-v2
+  name: openapi-catalog-import-v3
   namespace: identidade-carioca-mapping
   labels:
     app.kubernetes.io/name: openapi-catalog-import
@@ -17,7 +17,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: openapi-catalog-import
-          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-e92ba45afcdbafbcb1ea1ca05437d969c2403e7f@sha256:ceef613e3221cfd8e6bf81eda3deb5adb6582784685c0dabbccaba4b8e10c30a
+          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-9a5e4a7bedadc4b878c3fd850c5d779c997de204@sha256:db01eafe647b2682bd2f195663cf4208778ad6e65f0b210c5d261d8c93a77268
           command: ["/app/.venv/bin/python"]
           args: ["-m", "app.import_openapi_catalog"]
           env:
