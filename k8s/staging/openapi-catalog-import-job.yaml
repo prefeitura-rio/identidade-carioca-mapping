@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: openapi-catalog-import-v1
+  name: openapi-catalog-import-v2
   namespace: identidade-carioca-mapping
   labels:
     app.kubernetes.io/name: openapi-catalog-import
