@@ -3,7 +3,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).parents[1]
 _SENTINEL_ENV_LINES = (
     "name: REDIS_SENTINEL_HOSTS",
-    "value: redis.cerbos-redis.svc.cluster.local:26379",
+    "value: redis-announce-0.cerbos-redis.svc.cluster.local:26379,redis-announce-1.cerbos-redis.svc.cluster.local:26379",
     "name: REDIS_SENTINEL_SERVICE_NAME",
     "value: mymaster",
 )

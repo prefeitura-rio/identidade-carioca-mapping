@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: identidade-carioca-mapping-rebuild-projection-v3
+  name: identidade-carioca-mapping-rebuild-projection-v4
   namespace: identidade-carioca-mapping
 spec:
   backoffLimit: 6
@@ -11,12 +11,12 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: rebuild-projection
-          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-1c9b241fe8cda7ba20ea5709043f6b69e03c82f5@sha256:4b822b6ba6cc47c4bf05d7ae59f0b1fd7007c61ae78bb93537c42fd97349d87c
+          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-9a5e4a7bedadc4b878c3fd850c5d779c997de204@sha256:db01eafe647b2682bd2f195663cf4208778ad6e65f0b210c5d261d8c93a77268
           command: ["/app/.venv/bin/python"]
           args: ["-m", "app.rebuild_mapping_projection"]
           env:
             - name: REDIS_SENTINEL_HOSTS
-              value: redis.cerbos-redis.svc.cluster.local:26379
+              value: redis-announce-0.cerbos-redis.svc.cluster.local:26379,redis-announce-1.cerbos-redis.svc.cluster.local:26379
             - name: REDIS_SENTINEL_SERVICE_NAME
               value: mymaster
           envFrom:
