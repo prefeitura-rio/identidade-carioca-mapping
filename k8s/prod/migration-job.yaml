@@ -11,7 +11,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-dbc5098d2b097ad3bbec0f05edd03f5f0a04698e@sha256:d1f90399608fc212db8995ee7a2edf9dede962f9aa5bd5ee8d7b84e08c1f301c
+          image: ghcr.io/prefeitura-rio/identidade-carioca-mapping:sha-34e33a191c6b200c21f8a675fdd31f7d4cc5393a@sha256:f0ededa240d235353e9f8ffd4116f76c368798d6379d1cf25a9a3fdbc77870b3
           command: ["/app/.venv/bin/alembic"]
           args: ["upgrade", "head"]
           envFrom:
