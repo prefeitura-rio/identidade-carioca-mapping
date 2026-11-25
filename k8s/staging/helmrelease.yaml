@@ -53,8 +53,8 @@ spec:
     infisicalSecret:
       enabled: true
       secretName: heimdall-secrets
-      projectSlug: identidade-carioca-mapping-dgl-j
-      envSlug: staging
+      projectSlug: identidade-carioca-mapping
+      envSlug: stg
       creationPolicy: Orphan
       universalAuth:
         credentialsRef:
